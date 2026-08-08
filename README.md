@@ -1,136 +1,118 @@
-# QRIS Hook — Payment Gateway via Notification Hook + Telegram Bot
+# QRIS Payment Gateway — Notification Hook + Telegram Bot
 
-Payment gateway QRIS berbasis **notification hook**: aplikasi Android memantau notifikasi pembayaran QRIS masuk (DANA), meneruskannya ke webhook server, lalu server mencocokkan ke invoice, mengonfirmasi pembayaran, dan memberi tahu pelanggan lewat **Telegram bot**.
+Sistem payment gateway QRIS yang mengubah HP Android menjadi penerima pembayaran otomatis:
 
-Dibangun dari fork [suriyadi15/qrishook](https://github.com/suriyadi15/qrishook) (MIT) dengan tambahan:
-- Parser notifikasi **DANA** (`id.dana`)
-- **QRIS dinamis** — nominal otomatis terisi saat discan (port dari [verssache/qris-dinamis](https://github.com/verssache/qris-dinamis))
-- **Mesin invoice** (SQLite) + matching otomatis + callback
-- **Telegram bot** — buat invoice, tampilkan QR, konfirmasi otomatis
+1. **Aplikasi Android** memantau notifikasi pembayaran QRIS masuk (DANA) via `NotificationListenerService`
+2. Setiap notifikasi diteruskan sebagai **webhook** ke server
+3. Server **mencocokkan nominal** ke invoice pending → tandai `paid` → kirim **konfirmasi otomatis ke Telegram bot**
+4. Buyer membayar lewat **QRIS dinamis** — nominal sudah terisi, tinggal scan
+
+Backend berjalan di **Supabase** (Edge Functions + Postgres + pg_cron) — tanpa VPS, tanpa proses berjalan sendiri.
+
+Dibangun dari [suriyadi15/qrishook](https://github.com/suriyadi15/qrishook) (MIT) dengan tambahan parser DANA, QRIS dinamis (port dari [verssache/qris-dinamis](https://github.com/verssache/qris-dinamis), MIT), mesin invoice, dan bot Telegram.
 
 ---
 
 ## Arsitektur
 
 ```
-                     ┌─────────────────────────────────────────────┐
-                     │               HP Merchant (yxrn)             │
-                     │  DANA app (terima notifikasi)               │
-                     │  QRIS Hook app (NotificationListener)       │
-                     └──────────────────┬──────────────────────────┘
-                                        │ POST /hook (webhook)
-                                        ▼
-                     ┌─────────────────────────────────────────────┐
-                     │          tencent2 (VPS worker)               │
-                     │  gateway.py  :8080  (HTTP + SQLite)          │
-                     │  bot.py      :8081  (Telegram long-polling)  │
-                     │  qris.py     (static→dynamic converter)      │
-                     └─────────┬───────────────┬────────────────────┘
-                               │               │ callback (lunas)
-                               ▼               ▼
-                     ┌──────────────┐   ┌──────────────┐
-                     │  Buyer HP    │   │ Telegram Bot │
-                     │  scan QR     │   │ @Payyebot    │
-                     └──────────────┘   └──────────────┘
+HP Android (wajib nyala — sumber notifikasi)
+├── DANA app            : menerima pembayaran QRIS
+└── QRIS Hook app       : NotificationListener -> POST webhook
+                            │
+                            ▼
+Supabase (Edge Functions + Postgres)
+├── /hook        : terima webhook, cocokkan nominal -> paid
+├── /invoice     : buat invoice + payload QRIS dinamis
+├── /qris        : gambar QR (hanya saat pending)
+├── /bot         : webhook Telegram (perintah /pay /status /cancel)
+├── /expiry      : sweep kadaluarsa tiap menit (pg_cron)
+└── /health      : ping anti-pause (cron-job.org)
+
+Buyer → scan QR dinamis → bayar → uang masuk DANA → notifikasi → hook → paid → bot konfirmasi ✅
 ```
 
-**Alur pembayaran:**
-
-1. Buyer meminta nominal → sistem membuat invoice (`POST /invoice`)
-2. Sistem menampilkan QR dinamis (`GET /qris/<invoice_id>.png`) — nominal sudah terisi di QR
-3. Buyer scan & bayar dengan app QRIS apa pun (DANA, GoPay, OVO, bank, dst.)
-4. Notifikasi "Pembayaran Masuk" muncul di HP merchant → ditangkap app QRIS Hook
-5. App mengirim payload ke `POST /hook` → gateway mencocokkan nominal ke invoice pending
-6. Invoice → `paid`, callback dikirim ke `callback_url` + bot Telegram mengonfirmasi otomatis
-
-**Akses publik:** https://manhwashorts.masamba.web.id (Cloudflare Tunnel, HTTPS otomatis — tanpa buka port inbound)
+**Base URL:** `https://odnezlijimaobxuxmmvt.supabase.co/functions/v1/`
 
 ---
 
-## API Gateway
+## API
 
-Base URL: `https://manhwashorts.masamba.web.id`
-Semua endpoint **wajib header** `X-Webhook-Secret: <SECRET>` kecuali yang ditandai *publik*.
+Semua endpoint butuh header `X-Webhook-Secret: <SECRET>` kecuali yang ditandai *publik*.
 
 ### `POST /invoice` — buat invoice
 
-Body:
 ```json
 {
-  "amount": 15000,              // wajib, int, IDR (100 - 10.000.000)
-  "reference": "ORD-001",       // opsional, string bebas
-  "callback_url": "https://app.kamu/hook",  // opsional, dipanggil saat lunas
-  "callback_secret": "rahasia", // opsional, dikirim sbg header X-Callback-Secret
-  "expires_in": 900             // opsional, detik (default 900 = 15 menit, 0 = tanpa batas)
+  "amount": 15000,
+  "reference": "ORD-001",
+  "callback_url": "https://app.kamu/hook",
+  "callback_secret": "rahasia",
+  "expires_in": 900
 }
 ```
+
+| Field | Wajib | Keterangan |
+|---|---|---|
+| `amount` | ✅ | int, IDR, 100 – 10.000.000 |
+| `reference` | ❌ | string bebas |
+| `callback_url` | ❌ | dipanggil saat lunas |
+| `callback_secret` | ❌ | header `X-Callback-Secret` di callback |
+| `expires_in` | ❌ | detik, default 900 (15 menit), `0` = tanpa batas |
 
 Respons `201`:
 ```json
 {
   "invoice_id": "inv_0d64b7bd8993",
-  "amount": 15000,              // nominal asli
-  "charged_amount": 15059,      // nominal QR = amount + kode unik
+  "amount": 15000,
+  "charged_amount": 15059,
   "reference": "ORD-001",
   "status": "pending",
-  "expires_at": "2026-08-08T07:55:00+00:00",
+  "expires_at": "2026-08-09T07:55:00+00:00",
   "expires_in": 900,
-  "qris_payload": "000201010212...",   // string EMV dinamis (nominal terisi)
-  "qris_url": "/qris/inv_0d64b7bd8993.png"
+  "qris_payload": "000201010212...",
+  "qris_url": "https://odnezlijimaobxuxmmvt.supabase.co/functions/v1/qris?invoice_id=inv_0d64b7bd8993"
 }
 ```
 
 Error: `400` amount tidak valid · `401` secret salah.
 
-### `GET /qris/<invoice_id>.png` — gambar QR dinamis *(publik)*
+### `GET /qris?invoice_id=<id>` — gambar QR dinamis *(publik)*
 
-PNG QR untuk ditampilkan ke buyer. Nominal `charged_amount` sudah tertanam — buyer scan langsung bisa bayar tanpa memasukkan nominal. `404` jika invoice tidak ada.
+PNG QR dengan nominal `charged_amount` terisi. Hanya untuk invoice berstatus `pending`; selain itu `404`.
 
-### `POST /hook` — webhook dari app QRIS Hook
+### `POST /hook` — webhook dari aplikasi Android
 
-Dipanggil app Android. Body = payload notifikasi (lihat format di bawah). Gateway mencocokkan `payment.amount` ke invoice pending dengan nominal sama → `paid` + callback.
+Mencocokkan `payment.amount` ke invoice pending (yang belum kadaluarsa) dengan nominal sama → `paid` + konfirmasi bot + callback.
 
-Respons: `{"ok": true, "matched": "<invoice_id>"}` — `matched: null` jika tidak ada invoice cocok (pembayaran tak dikenal → alert ke bot).
+Respons: `{"ok": true, "matched": "<invoice_id>"}` — `matched: null` jika tidak ada yang cocok (pembayaran tak dikenal → alert ⚠️ ke bot).
 
-### `GET /invoice/<invoice_id>` — cek status invoice
+### `POST /bot` — webhook Telegram
 
-Respons:
-```json
-{
-  "id": "inv_0d64b7bd8993",
-  "amount": 15059,              // nominal dibayar (termasuk kode unik)
-  "base_amount": 15000,         // nominal asli
-  "reference": "ORD-001",
-  "status": "paid",             // pending | paid | expired | cancelled
-  "sender_name": "Budi",
-  "event_id": "332b98c4-...",
-  "paid_at": "2026-08-08T08:02:30+00:00",
-  "expires_at": "2026-08-08T07:55:00+00:00",
-  "created_at": "2026-08-08T07:40:27+00:00"
-}
-```
+Dikenali lewat header `X-Telegram-Bot-Api-Secret-Token`. Perintah:
 
-### `POST /invoice/<invoice_id>/cancel` — batalkan invoice
+| Perintah | Fungsi |
+|---|---|
+| `/start` `/help` | panduan |
+| `/pay <nominal>` atau ketik angka | buat invoice → kirim QR + nominal bayar |
+| `/status <invoice_id>` | cek status |
+| `/cancel <invoice_id>` | batalkan (QR dihapus dari chat) |
 
-Hanya berlaku untuk status `pending`. `200` berhasil, `404` jika tidak ada/ tidak pending.
+Konfirmasi otomatis setelah lunas: `✅ Lunas!` + invoice + nominal.
 
-### `GET /invoices?status=pending` — daftar invoice
+### `POST /expiry` — sweep kadaluarsa
 
-Filter opsional `status`: `pending | paid | expired | cancelled`. Maks 50 terbaru.
+Dipanggil pg_cron tiap menit (via pg_net). Invoice lewat `expires_at` → `expired`, pesan QR dihapus dari chat, user dikabari.
 
-### `GET /recent` — log event webhook mentah
+### `GET /health` — health check *(publik)*
 
-32 event terakhir (rekonsiliasi manual). Setiap pembayaran tercatat di sini meskipun tidak match invoice.
-
-### `GET /healthz` — health check *(publik)*
-
-`{"ok": true}`
+`{"ok": true}` — dipakai cron-job.org agar proyek tidak ter-pause (Supabase free men-pause proyek setelah 7 hari tanpa aktivitas).
 
 ---
 
-## Callback (saat lunas)
+## Callback saat lunas
 
-`POST` ke `callback_url` invoice dengan header `X-Callback-Secret` (jika diset):
+`POST` ke `callback_url` dengan header `X-Callback-Secret`:
 ```json
 {
   "invoice_id": "inv_0d64b7bd8993",
@@ -138,21 +120,18 @@ Filter opsional `status`: `pending | paid | expired | cancelled`. Maks 50 terbar
   "base_amount": 15000,
   "reference": "ORD-001",
   "status": "paid",
-  "sender_name": "Budi",
+  "sender_name": null,
   "event_id": "332b98c4-...",
-  "paid_at": "2026-08-08T08:02:30+00:00"
+  "paid_at": "2026-08-09T08:02:30+00:00"
 }
 ```
 
-**Catatan:** callback one-shot (tanpa retry). Kalau endpoint down, event tetap bisa dicek via `GET /recent`.
+Fire-and-forget (tanpa retry). Riwayat lengkap tersimpan di tabel `events`.
 
 ### Alert pembayaran tak dikenal
 
-QRIS dinamis tidak memiliki mekanisme kedaluwarsa teknis (standar EMVCo) — QR yang sudah `expired`/`cancelled` **tetap bisa discan & dibayar**, uang masuk ke rekening merchant. Gateway mengirim alert ke bot:
-```json
-{"status": "unmatched", "amount": 12345, "sender_name": "X", "event_id": "..."}
-```
-Bot membalas ke semua chat terdaftar: ⚠️ pembayaran tanpa invoice aktif.
+QR yang sudah `expired`/`cancelled` atau bayar tanpa invoice → webhook masuk tapi tidak match → bot mengirim ke semua chat terdaftar:
+> ⚠️ Pembayaran tanpa invoice aktif — Nominal: Rp50.000
 
 ---
 
@@ -161,8 +140,7 @@ Bot membalas ke semua chat terdaftar: ⚠️ pembayaran tanpa invoice aktif.
 Supaya nominal tiap invoice pending unik (matching pasti), nominal QR = `amount + kode unik`:
 
 - Maksimal **5%** dari nominal
-- Cap **50** untuk nominal ≤ Rp10.000
-- Cap **200** untuk nominal > Rp10.000
+- Cap **50** untuk nominal ≤ Rp10.000, cap **200** untuk > Rp10.000
 
 | Nominal | Rentang kode | Beban maks |
 |---|---|---|
@@ -171,148 +149,55 @@ Supaya nominal tiap invoice pending unik (matching pasti), nominal QR = `amount 
 | Rp10.000 | 1–50 | 0,5% |
 | Rp100.000 | 1–200 | 0,2% |
 
-Buyer membayar `charged_amount`; sistem hanya menganggap lunas jika `payment.amount` sama persis.
+Buyer membayar `charged_amount`; lunas hanya jika `payment.amount` sama persis.
 
 ---
 
-## Telegram Bot (@Payyebot)
+## Kedaluwarsa
 
-| Perintah | Fungsi |
-|---|---|
-| `/start` `/help` | Info & panduan |
-| `/pay 15000` atau ketik `15000` | Buat invoice → kirim QR dinamis + nominal bayar |
-| `/status <invoice_id>` | Cek status invoice |
-| `/cancel <invoice_id>` | Batalkan invoice |
-
-Alur di bot: kirim nominal → bot balas QR + `Rp15.059 (= Rp15.000 + kode 59)` + berlaku 15 menit → buyer bayar → bot konfirmasi otomatis ✅ (beserta nama pengirim).
-
-Chat yang pernah memakai bot terdaftar otomatis (`chats.json`) dan menerima alert pembayaran tak dikenal.
-
----
-
-## Payload webhook (dari app)
-
-Contoh (disensor):
-```json
-{
-  "event_id": "332b98c4-...",
-  "type": "qris_payment",
-  "merchant_id": "dana",
-  "notification": {
-    "source_package": "id.dana",
-    "source_app": "DANA",
-    "title": "Pembayaran Masuk",
-    "text": "Rp169 diterima DANA Bisnis.",
-    "big_text": "...",
-    "received_at": "..."
-  },
-  "payment": {
-    "amount": 169,
-    "currency": "IDR",
-    "sender_name": "DANA Bisnis",
-    "payment_source": null
-  },
-  "raw": { "...": "..." }
-}
-```
-
----
-
-## QRIS Dinamis
-
-`gateway/qris.py` — konversi QRIS statis → dinamis (port dari verssache/qris-dinamis, MIT):
-
-1. `010211` → `010212` (Point of Initiation: static → dynamic)
-2. Sisipkan tag `54` (Transaction Amount) sebelum tag `58` (Country Code)
-3. Hitung ulang CRC16-CCITT (polinomial `0x1021`, init `0xFFFF`) pada tag `63`
-
-Payload statis milik merchant disimpan sebagai `STATIC_PAYLOAD` di `qris.py`. Tiap invoice menghasilkan payload baru dengan nominal `charged_amount`. Terverifikasi identik dengan implementasi TypeScript asli.
+- Default 15 menit per invoice (`expires_in`)
+- pg_cron tiap menit → `expiry` → status `expired`
+- **Pesan QR di chat dihapus otomatis** + notifikasi kedaluwarsa
+- Endpoint `/qris` → `404` untuk invoice non-pending
+- Catatan: QR yang sudah ter-screenshot tetap bisa dibayar (standar EMVCo tanpa field expiry) — pembayaran telat itu tidak match dan memicu alert ⚠️
 
 ---
 
 ## Deploy
 
-### 1. Android (app QRIS Hook)
-
-Build APK custom:
-```bash
-export ANDROID_HOME=/opt/android-sdk
-export ANDROID_KEYSTORE_PATH=~/qrishook-dana.jks
-export ANDROID_KEYSTORE_PASSWORD=<password>
-export ANDROID_KEY_ALIAS=qrishook
-export ANDROID_KEY_PASSWORD=<password>
-export ANDROID_VERSION_CODE=30 ANDROID_VERSION_NAME=1.2.0-dana
-./gradlew test assembleRelease
-# output: app/build/outputs/apk/release/app-release.apk
-```
-
-Setup di HP: install APK → izinkan Notification access → isi Webhook URL `https://manhwashorts.masamba.web.id/hook` + Secret → pilih merchant **DANA** → aktifkan QRIS Hook Active (+ ignore battery optimization).
-
-### 2. Gateway (`gateway/gateway.py`) + Bot (`gateway/bot.py`)
-
-Env gateway (`/etc/qrishook-hook.env`):
-```
-QRIS_HOOK_SECRET=<secret>
-QRIS_HOOK_DATA=/opt/qrishook-hook/data
-QRIS_HOOK_PORT=8080
-QRIS_ALERT_URL=http://127.0.0.1:8081/cb-bot
-```
-
-Env bot (`/etc/qrishook-bot.env`):
-```
-QRIS_BOT_TOKEN=<bot token>
-GATEWAY_SECRET=<secret>
-GATEWAY_URL=http://127.0.0.1:8080
-QRIS_PUBLIC_URL=https://manhwashorts.masamba.web.id
-CALLBACK_PORT=8081
-```
-
-Systemd: `qrishook-hook.service` (gateway) + `qris-bot.service` (bot). Akses publik via Cloudflare Tunnel (`cf-qrishook.service`) — hostname ke `127.0.0.1:8080`, tanpa membuka port di security group.
-
----
-
-## Keamanan & batasan
-
-- **Matching by nominal** — kode unik 1–200 membuat nominal tiap invoice pending unik; jika tetap bentrok (sangat jarang), invoice tertua yang kena.
-- **QR expired tetap bisa dibayar** (standar EMVCo) — ditangani via alert ⚠️ + log `/recent`; di sisi aplikasi sebaiknya jangan tampilkan QR setelah `expires_at`.
-- Callback one-shot tanpa retry.
-- Secret webhook/callback dikirim sebagai header — pastikan HTTPS (sudah via Cloudflare Tunnel).
-- Penggunaan sesuai ToS masing-masing penyedia QRIS; untuk usaha sendiri.
+1. Buat proyek Supabase (region Singapore), jalankan `supabase/migrations/0001_init.sql`
+2. Salin `supabase/.env.example` → `.env.local`, isi nilai → `supabase secrets set --env-file .env.local`
+3. Deploy fungsi:
+   ```bash
+   supabase link --project-ref <REF>
+   supabase functions deploy health invoice qris hook bot expiry --no-verify-jwt
+   ```
+4. Set webhook Telegram:
+   ```
+   https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<REF>.supabase.co/functions/v1/bot&secret_token=<TG_SECRET_TOKEN>
+   ```
+5. Aplikasi Android: install APK, Notification access, webhook URL `.../functions/v1/hook` + secret
+6. cron-job.org: ping `.../functions/v1/health` tiap 1 hari (anti-pause 7 hari)
 
 ---
 
 ## Struktur repo
 
 ```
-app/                    # Aplikasi Android (fork qrishook + parser DANA)
-gateway/
-  gateway.py            # Mesin invoice + API + matching (stdlib, SQLite)
-  bot.py                # Telegram bot @Payyebot (long-polling + callback HTTP)
-  qris.py               # Converter QRIS statis → dinamis (CRC16)
-release/
-  qrishook-1.2.0-dana.apk
+app/                     # Aplikasi Android (fork + parser DANA)
+supabase/
+  functions/             # Edge Functions (Deno/TS)
+    _shared/             # qris converter, telegram helper, invoice factory, http
+    health invoice qris hook bot expiry/
+  migrations/            # schema + cron
+  .env.example           # template secrets
+gateway/                 # implementasi Python lama (referensi/cadangan)
+release/                 # APK signed
 ```
 
 ## Verifikasi APK
 
 - APK SHA-256: `458979d8759663348a44114fb7e76f394128b685365304bb8384b9679b5bd3fc`
-- Cert SHA-256: `b4de5253ed23dce66e6c580127999604fc0c3d4e91949421574240673b71021b` — verifikasi fingerprint sama di tiap update.
+- Cert SHA-256: `b4de5253ed23dce66e6c580127999604fc0c3d4e91949421574240673b71021b`
 
 Keystore & password tidak masuk repo. Lisensi: MIT (upstream).
-
-## Supabase deployment (cloud, tanpa VPS)
-
-Fungsi Edge (`supabase/functions/`, Deno/TS, deploy via `supabase functions deploy <name> --no-verify-jwt`):
-
-| Fungsi | Endpoint | Fungsi |
-|---|---|---|
-| `invoice` | `POST /functions/v1/invoice` | buat invoice + QR dinamis |
-| `qris` | `GET /functions/v1/qris?invoice_id=` | PNG QR (hanya `pending`, selain itu 404) |
-| `hook` | `POST /functions/v1/hook` | webhook app Android |
-| `bot` | webhook Telegram (secret token) | perintah /pay /status /cancel |
-| `expiry` | `POST /functions/v1/expiry` | sweep expired + hapus QR di chat |
-| `health` | `GET /functions/v1/health` | health check (cron-job.org anti-pause) |
-
-- **Expired**: pg_cron tiap menit → panggil `expiry` via pg_net → status `expired`, pesan QR di Telegram dihapus (`deleteMessage`), buyer dikabari; endpoint QR 404.
-- **Cancel**: QR ikut dihapus dari chat.
-- Anti-pause 7 hari: cron-job.org ping `health` tiap 1 hari.

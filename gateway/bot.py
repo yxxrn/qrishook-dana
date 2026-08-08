@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Telegram bot QRIS gateway (@Payyebot). Stdlib only.
+"""Telegram bot QRIS gateway (legacy Python, digantikan Supabase). Stdlib only.
 Ketik nominal -> invoice + QR dinamis -> bayar -> bot konfirmasi otomatis via callback.
 
 Env: QRIS_BOT_TOKEN, GATEWAY_SECRET, GATEWAY_URL (default http://127.0.0.1:8080),
-     QRIS_PUBLIC_URL (default https://manhwashorts.masamba.web.id), CALLBACK_PORT (8081)
+     QRIS_PUBLIC_URL (default https://<PUBLIC_URL>), CALLBACK_PORT (8081)
 """
 import os, json, urllib.request, urllib.parse, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TOKEN = os.environ["QRIS_BOT_TOKEN"]
 GW_SECRET = os.environ["GATEWAY_SECRET"]
 GW = os.environ.get("GATEWAY_URL", "http://127.0.0.1:8080")
-PUBLIC = os.environ.get("QRIS_PUBLIC_URL", "https://manhwashorts.masamba.web.id")
+PUBLIC = os.environ.get("QRIS_PUBLIC_URL", "https://<PUBLIC_URL>")
 CB_PORT = int(os.environ.get("CALLBACK_PORT", "8081"))
 EXPIRES = 900  # detik, selaras dengan default gateway
 CHATS_FILE = os.path.join(os.environ.get("QRIS_HOOK_DATA", "/opt/qrishook-hook/data"), "chats.json")
