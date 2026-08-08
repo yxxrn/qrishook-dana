@@ -234,9 +234,11 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(amount, int) or amount <= 0:
                 return self._json(400, {"error": "amount must be positive int (IDR)"})
             conn = db()
-            # surcharge unik 1-100 supaya nominal tiap invoice pending beda -> matching pasti
+            # surcharge unik supaya nominal tiap invoice pending beda -> matching pasti.
+            # nominal ratusan: kode 1-10; nominal >= 1000: kode 1-100
+            max_code = 10 if amount < 1000 else 100
             while True:
-                charged = amount + random.randint(1, 100)
+                charged = amount + random.randint(1, max_code)
                 clash = conn.execute(
                     "SELECT 1 FROM invoices WHERE status='pending' AND amount=?", (charged,)).fetchone()
                 if not clash:
