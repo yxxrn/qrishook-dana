@@ -70,6 +70,7 @@ def handle_message(msg):
     chat = msg["chat"]["id"]
     text = (msg.get("text") or "").strip()
     low = text.lower()
+    remember_chat(chat)
     if low in ("/start", "/help", "help", "bantuan"):
         tg("sendMessage", chat_id=chat, text=(
             "🏪 *QRIS Gateway - yxrn store*\n\n"
@@ -117,7 +118,6 @@ def handle_message(msg):
     if code != 201:
         tg("sendMessage", chat_id=chat, text=f"❌ Gagal buat invoice: {d.get('error', code)}")
         return
-    remember_chat(chat)
     extra = d["charged_amount"] - amount
     caption = (
         f"🧾 *{d['invoice_id']}*\n\n"

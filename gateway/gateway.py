@@ -193,8 +193,8 @@ class Handler(BaseHTTPRequestHandler):
                     " (expires_at IS NULL OR expires_at > ?) ORDER BY created_at ASC LIMIT 1",
                     (amount, now())).fetchone()
                 if row:
-                    cols = ["id", "amount", "reference", "callback_url", "callback_secret", "status",
-                            "sender_name", "event_id", "paid_at", "created_at"]
+                    cols = ["id", "amount", "base_amount", "reference", "callback_url", "callback_secret", "status",
+                            "sender_name", "event_id", "paid_at", "expires_at", "created_at"]
                     inv = dict(zip(cols, row))
                     conn.execute("UPDATE invoices SET status='paid', sender_name=?, event_id=?, paid_at=? WHERE id=?",
                                  (sender, body.get("event_id"), now(), inv["id"]))
