@@ -39,3 +39,13 @@ Verifikasi fingerprint cert yang sama di setiap update.
 
 Keystore (`~/qrishook-dana.jks`) & password **tidak** masuk repo.
 Hanya digunakan untuk device/akun milik sendiri.
+
+## Gateway & Bot Telegram
+
+Server: `gateway/gateway.py` (tencent2) + `gateway/bot.py` (Telegram @Payyebot).
+
+- Bot: kirim nominal → invoice + QR dinamis → bayar → konfirmasi otomatis.
+- Command: `/pay <nominal>`, `/status <id>`, `/cancel <id>`, `/start`.
+- Invoice default berlaku 15 menit (`expires_in` detik per invoice, 0 = tanpa batas; status otomatis `expired`).
+- Nominal QR = base + kode unik 1-100 → matching pasti.
+- Callback ke `callback_url` saat lunas (header `X-Callback-Secret`).
