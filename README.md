@@ -77,9 +77,9 @@ Respons `201`:
 
 Error: `400` amount tidak valid · `401` secret salah.
 
-### `GET /qris?invoice_id=<id>` — gambar QR dinamis *(publik)*
+### `GET /qris?invoice_id=<id>&t=<token>` — gambar QR dinamis
 
-PNG QR dengan nominal `charged_amount` terisi. Hanya untuk invoice berstatus `pending`; selain itu `404`.
+PNG QR dengan nominal `charged_amount` terisi. Wajib param `t` = token HMAC yang hanya bisa dihasilkan pemilik secret (token disertakan di `qris_url` saat buat invoice). Tanpa token/salah token → `404`. Hanya untuk invoice berstatus `pending`.
 
 ### `POST /hook` — webhook dari aplikasi Android
 
@@ -104,9 +104,9 @@ Konfirmasi otomatis setelah lunas: `✅ Lunas!` + invoice + nominal.
 
 Dipanggil pg_cron tiap menit (via pg_net). Invoice lewat `expires_at` → `expired`, pesan QR dihapus dari chat, user dikabari.
 
-### `GET /health` — health check *(publik)*
+### `GET /health` — health check
 
-`{"ok": true}` — dipakai cron-job.org agar proyek tidak ter-pause (Supabase free men-pause proyek setelah 7 hari tanpa aktivitas).
+`{"ok": true}` — butuh header `X-Webhook-Secret`. Dipakai cron-job.org (job dengan custom header) agar proyek tidak ter-pause (Supabase free men-pause proyek setelah 7 hari tanpa aktivitas).
 
 ---
 
@@ -177,7 +177,7 @@ Buyer membayar `charged_amount`; lunas hanya jika `payment.amount` sama persis.
    https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<REF>.supabase.co/functions/v1/bot&secret_token=<TG_SECRET_TOKEN>
    ```
 5. Aplikasi Android: install APK, Notification access, webhook URL `.../functions/v1/hook` + secret
-6. cron-job.org: ping `.../functions/v1/health` tiap 1 hari (anti-pause 7 hari)
+6. cron-job.org: job ping `.../functions/v1/health` tiap 1 hari, method `POST`, custom header `X-Webhook-Secret: <SECRET>` (anti-pause 7 hari). Alternatif jika tidak mendukung header: UptimeRobot (free, mendukung header)
 
 ---
 

@@ -18,7 +18,12 @@ export async function createInvoice(supabase: any, amount: number, reference: st
     callback_secret: callbackSecret, expires_at: expiresAt, status: "pending",
   });
   if (error) throw error;
-  const qrisUrl = `${Deno.env.get("QRIS_PUBLIC_URL")}/functions/v1/qris?invoice_id=${invId}`;
+  // token QR: hanya pemilik secret yang bisa menghasilkan URL QR yang valid
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(Deno.env.get("QRIS_HOOK_SECRET")),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(invId));
+  const token = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const qrisUrl = `${Deno.env.get("QRIS_PUBLIC_URL")}/functions/v1/qris?invoice_id=${invId}&t=${token}`;
   return { invoice_id: invId, amount, charged_amount: charged, reference, status: "pending",
            expires_at: expiresAt, expires_in: expiresIn, qris_payload: convert(charged), qris_url: qrisUrl };
 }
