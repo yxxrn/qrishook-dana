@@ -27,6 +27,7 @@ DATA_DIR = os.environ.get("QRIS_HOOK_DATA", "/opt/qrishook-hook/data")
 PORT = int(os.environ.get("QRIS_HOOK_PORT", "8080"))
 DB = os.path.join(DATA_DIR, "gateway.db")
 QRIS_IMG = "/opt/qrishook-hook/qris.png"
+ALERT_URL = os.environ.get("QRIS_ALERT_URL", "")  # menerima {"status":"unmatched",...}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS invoices (
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   sender_name TEXT,
   event_id TEXT,
   paid_at TEXT,
+  expires_at TEXT,
   created_at TEXT NOT NULL
 );
 """
@@ -53,6 +55,10 @@ def db():
     os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB)
     conn.execute(_SCHEMA)
+    # sweep: invoice kadaluarsa -> expired (expires_at null = tanpa batas)
+    conn.execute("UPDATE invoices SET status='expired' WHERE status='pending'"
+                 " AND expires_at IS NOT NULL AND expires_at < ?", (now(),))
+    conn.commit()
     return conn
 
 
@@ -145,7 +151,7 @@ class Handler(BaseHTTPRequestHandler):
             if not row:
                 return self._json(404, {"error": "invoice not found"})
             cols = ["id", "amount", "base_amount", "reference", "callback_url", "callback_secret", "status",
-                    "sender_name", "event_id", "paid_at", "created_at"]
+                    "sender_name", "event_id", "paid_at", "expires_at", "created_at"]
             d = dict(zip(cols, row))
             d.pop("callback_secret", None)
             return self._json(200, d)
@@ -183,8 +189,9 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(amount, int) and amount > 0:
                 conn = db()
                 row = conn.execute(
-                    "SELECT * FROM invoices WHERE status='pending' AND amount=? ORDER BY created_at ASC LIMIT 1",
-                    (amount,)).fetchone()
+                    "SELECT * FROM invoices WHERE status='pending' AND amount=? AND"
+                    " (expires_at IS NULL OR expires_at > ?) ORDER BY created_at ASC LIMIT 1",
+                    (amount, now())).fetchone()
                 if row:
                     cols = ["id", "amount", "reference", "callback_url", "callback_secret", "status",
                             "sender_name", "event_id", "paid_at", "created_at"]
@@ -200,7 +207,22 @@ class Handler(BaseHTTPRequestHandler):
                         fire_callback(inv["callback_url"], inv["callback_secret"], payload)
                     return self._json(200, {"ok": True, "matched": inv["id"]})
                 conn.close()
+            if isinstance(amount, int) and amount > 0 and ALERT_URL:
+                # pembayaran tanpa invoice aktif (expired/cancelled/tidak pernah ada)
+                fire_callback(ALERT_URL, "", {"status": "unmatched", "amount": amount,
+                                              "sender_name": sender, "event_id": body.get("event_id")})
             return self._json(200, {"ok": True, "matched": None})
+        if self.path.startswith("/invoice/") and self.path.endswith("/cancel"):
+            if not self._auth_ok():
+                return self._json(401, {"error": "bad secret"})
+            inv_id = self.path.split("/")[-2]
+            conn = db()
+            cur = conn.execute("UPDATE invoices SET status='cancelled' WHERE id=? AND status='pending'", (inv_id,))
+            conn.commit()
+            conn.close()
+            if cur.rowcount == 0:
+                return self._json(404, {"error": "invoice not found or not pending"})
+            return self._json(200, {"ok": True, "invoice_id": inv_id, "status": "cancelled"})
         if self.path == "/invoice":
             if not self._auth_ok():
                 return self._json(401, {"error": "bad secret"})
@@ -220,14 +242,20 @@ class Handler(BaseHTTPRequestHandler):
                 if not clash:
                     break
             inv_id = "inv_" + uuid.uuid4().hex[:12]
-            conn.execute("INSERT INTO invoices (id, amount, base_amount, reference, callback_url, callback_secret, status, created_at)"
-                         " VALUES (?,?,?,?,?,?,'pending',?)",
+            expires_in = body.get("expires_in", 900)
+            expires_at = None
+            if isinstance(expires_in, int) and expires_in > 0:
+                from datetime import timedelta
+                expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+            conn.execute("INSERT INTO invoices (id, amount, base_amount, reference, callback_url, callback_secret, status, expires_at, created_at)"
+                         " VALUES (?,?,?,?,?,?,'pending',?,?)",
                          (inv_id, charged, amount, body.get("reference"), body.get("callback_url"),
-                          body.get("callback_secret"), now()))
+                          body.get("callback_secret"), expires_at, now()))
             conn.commit()
             conn.close()
             resp = {"invoice_id": inv_id, "amount": amount, "charged_amount": charged,
-                    "reference": body.get("reference"), "status": "pending"}
+                    "reference": body.get("reference"), "status": "pending",
+                    "expires_at": expires_at, "expires_in": expires_in}
             if sys_path_ok:
                 resp["qris_payload"] = qris.convert(charged)
                 resp["qris_url"] = f"/qris/{inv_id}.png"
