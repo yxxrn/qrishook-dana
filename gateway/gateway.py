@@ -90,6 +90,8 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/healthz":
             return self._json(200, {"ok": True})
         if p == "/recent":
+            if not self._auth_ok():
+                return self._json(401, {"error": "bad secret"})
             lines = []
             f = os.path.join(DATA_DIR, "events.jsonl")
             if os.path.exists(f):
@@ -105,6 +107,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         if p.startswith("/invoice/"):
+            if not self._auth_ok():
+                return self._json(401, {"error": "bad secret"})
             conn = db()
             row = conn.execute("SELECT * FROM invoices WHERE id=?", (p.split("/")[-1],)).fetchone()
             conn.close()
@@ -116,6 +120,8 @@ class Handler(BaseHTTPRequestHandler):
             d.pop("callback_secret", None)
             return self._json(200, d)
         if p.startswith("/invoices"):
+            if not self._auth_ok():
+                return self._json(401, {"error": "bad secret"})
             status = None
             if "?" in p:
                 status = dict(q.split("=") for q in p.split("?")[1].split("&")).get("status")
