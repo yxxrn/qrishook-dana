@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS public.events (
   created_at timestamptz DEFAULT now()
 );
 
+-- RLS: tanpa policy = anon ditolak; service_role (edge functions) bypass RLS
+ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tg_chats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
+
 -- Sweep expired tiap menit: panggil edge function /expiry via pg_net
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
