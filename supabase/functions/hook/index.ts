@@ -39,8 +39,7 @@ Deno.serve(async (req) => {
       if (ref && ref.startsWith("tg")) {
         EdgeRuntime.waitUntil(tg("sendMessage", {
           chat_id: Number(ref.slice(2)), parse_mode: "Markdown",
-          text: `✅ *Lunas!*\nInvoice: \`${inv.id}\`\nNominal: Rp${Number(inv.amount).toLocaleString("id-ID")}`
-            + (sender ? `\nPengirim: ${sender}` : ""),
+          text: `✅ *Lunas!*\nInvoice: \`${inv.id}\`\nNominal: Rp${Number(inv.amount).toLocaleString("id-ID")}`,
         }));
       }
       // callback eksternal
@@ -68,7 +67,7 @@ Deno.serve(async (req) => {
     const { data: chats } = await supabase.from("tg_chats").select("chat_id");
     if (!chats?.length) return;
     const txt = `⚠️ *Pembayaran tanpa invoice aktif*\nNominal: Rp${Number(amount).toLocaleString("id-ID")}`
-      + (sender ? `\nPengirim: ${sender}` : "") + "\nQR expired/cancel atau nominal tidak dikenal.";
+      + "\nQR expired/cancel atau nominal tidak dikenal.";
     for (const c of chats) {
       await tg("sendMessage", { chat_id: c.chat_id, parse_mode: "Markdown", text: txt });
     }

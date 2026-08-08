@@ -35,7 +35,6 @@ Deno.serve(async (req) => {
     const extra = Number(data.amount) - Number(data.base_amount);
     await tg("sendMessage", { chat_id: chat, parse_mode: "Markdown", text:
       `📄 *${data.id}*\nStatus: *${data.status}*\nNominal: ${rupiah(Number(data.base_amount))} (+ kode ${extra} = ${rupiah(Number(data.amount))})`
-      + (data.sender_name ? `\nPengirim: ${data.sender_name}` : "")
       + (data.paid_at ? `\nLunas: ${data.paid_at}` : "") });
     return json(200, { ok: true });
   }
