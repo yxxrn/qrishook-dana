@@ -12,9 +12,15 @@ API:
   GET  /recent | /healthz
 Env: QRIS_HOOK_SECRET, QRIS_HOOK_DATA, QRIS_HOOK_PORT
 """
-import os, json, hmac, sqlite3, threading, urllib.request, uuid
+import os, json, hmac, random, sqlite3, threading, urllib.request, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone
+
+sys_path_ok = os.path.exists("/opt/qrishook-hook/qris.py")
+if sys_path_ok:
+    import sys
+    sys.path.insert(0, "/opt/qrishook-hook")
+    import qris
 
 SECRET = os.environ.get("QRIS_HOOK_SECRET", "")
 DATA_DIR = os.environ.get("QRIS_HOOK_DATA", "/opt/qrishook-hook/data")
@@ -26,6 +32,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
   amount INTEGER NOT NULL,
+  base_amount INTEGER NOT NULL,
   reference TEXT,
   callback_url TEXT,
   callback_secret TEXT,
@@ -106,6 +113,29 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if p.startswith("/qris/"):
+            if not sys_path_ok:
+                return self._json(500, {"error": "qris module missing"})
+            conn = db()
+            row = conn.execute("SELECT amount FROM invoices WHERE id=?", (p.split("/")[-1].removesuffix(".png"),)).fetchone()
+            conn.close()
+            if not row:
+                return self._json(404, {"error": "invoice not found"})
+            try:
+                import qrcode
+                from io import BytesIO
+                payload = qris.convert(row[0])
+                buf = BytesIO()
+                qrcode.make(payload).save(buf, format="PNG")
+                data = buf.getvalue()
+            except Exception as e:
+                return self._json(500, {"error": str(e)})
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if p.startswith("/invoice/"):
             if not self._auth_ok():
                 return self._json(401, {"error": "bad secret"})
@@ -114,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
             if not row:
                 return self._json(404, {"error": "invoice not found"})
-            cols = ["id", "amount", "reference", "callback_url", "callback_secret", "status",
+            cols = ["id", "amount", "base_amount", "reference", "callback_url", "callback_secret", "status",
                     "sender_name", "event_id", "paid_at", "created_at"]
             d = dict(zip(cols, row))
             d.pop("callback_secret", None)
@@ -126,7 +156,7 @@ class Handler(BaseHTTPRequestHandler):
             if "?" in p:
                 status = dict(q.split("=") for q in p.split("?")[1].split("&")).get("status")
             conn = db()
-            q = "SELECT id, amount, reference, status, sender_name, paid_at, created_at FROM invoices"
+            q = "SELECT id, amount, base_amount, reference, status, sender_name, paid_at, created_at FROM invoices"
             args = ()
             if status:
                 q += " WHERE status=?"
@@ -134,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
             q += " ORDER BY created_at DESC LIMIT 50"
             rows = conn.execute(q, args).fetchall()
             conn.close()
-            cols = ["invoice_id", "amount", "reference", "status", "sender_name", "paid_at", "created_at"]
+            cols = ["invoice_id", "amount", "base_amount", "reference", "status", "sender_name", "paid_at", "created_at"]
             return self._json(200, [dict(zip(cols, r)) for r in rows])
         return self._json(404, {"error": "not found"})
 
@@ -181,17 +211,27 @@ class Handler(BaseHTTPRequestHandler):
             amount = body.get("amount")
             if not isinstance(amount, int) or amount <= 0:
                 return self._json(400, {"error": "amount must be positive int (IDR)"})
-            inv_id = "inv_" + uuid.uuid4().hex[:12]
             conn = db()
-            conn.execute("INSERT INTO invoices (id, amount, reference, callback_url, callback_secret, status, created_at)"
-                         " VALUES (?,?,?,?,?,'pending',?)",
-                         (inv_id, amount, body.get("reference"), body.get("callback_url"),
+            # surcharge unik 1-100 supaya nominal tiap invoice pending beda -> matching pasti
+            while True:
+                charged = amount + random.randint(1, 100)
+                clash = conn.execute(
+                    "SELECT 1 FROM invoices WHERE status='pending' AND amount=?", (charged,)).fetchone()
+                if not clash:
+                    break
+            inv_id = "inv_" + uuid.uuid4().hex[:12]
+            conn.execute("INSERT INTO invoices (id, amount, base_amount, reference, callback_url, callback_secret, status, created_at)"
+                         " VALUES (?,?,?,?,?,?,'pending',?)",
+                         (inv_id, charged, amount, body.get("reference"), body.get("callback_url"),
                           body.get("callback_secret"), now()))
             conn.commit()
             conn.close()
-            return self._json(201, {"invoice_id": inv_id, "amount": amount,
-                                    "reference": body.get("reference"), "status": "pending",
-                                    "qris_url": "/qris.png"})
+            resp = {"invoice_id": inv_id, "amount": amount, "charged_amount": charged,
+                    "reference": body.get("reference"), "status": "pending"}
+            if sys_path_ok:
+                resp["qris_payload"] = qris.convert(charged)
+                resp["qris_url"] = f"/qris/{inv_id}.png"
+            return self._json(201, resp)
         return self._json(404, {"error": "not found"})
 
     def log_message(self, *args):
