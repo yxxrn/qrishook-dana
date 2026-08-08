@@ -43,7 +43,8 @@ Deno.serve(async (req) => {
     if (!inv) { await tg("sendMessage", { chat_id: chat, text: "Format: /cancel <invoice_id>" }); return json(200, { ok: true }); }
     const { data } = await supabase.from("invoices").update({ status: "cancelled" })
       .eq("id", inv).eq("status", "pending").select().maybeSingle();
-    await tg("sendMessage", { chat_id: chat, text: data ? "✅ Invoice dibatalkan" : "❌ Tidak ditemukan / sudah tidak pending" });
+    if (data?.tg_msg_id) await tg("deleteMessage", { chat_id: chat, message_id: data.tg_msg_id });
+    await tg("sendMessage", { chat_id: chat, text: data ? "✅ Invoice dibatalkan (QR dihapus)" : "❌ Tidak ditemukan / sudah tidak pending" });
     return json(200, { ok: true });
   }
   if (low.startsWith("/pay")) arg = text.slice(4).trim();
@@ -59,10 +60,15 @@ Deno.serve(async (req) => {
   try {
     const inv = await createInvoice(supabase, amount, `tg${chat}`, null, null, EXPIRES);
     const extra = inv.charged_amount - amount;
-    await tg("sendPhoto", {
+    const sent = await tg("sendPhoto", {
       chat_id: chat, photo: inv.qris_url, parse_mode: "Markdown",
       caption: `🧾 *${inv.invoice_id}*\n\nBayar: *${rupiah(inv.charged_amount)}*\n(= ${rupiah(amount)} + kode ${extra})\n\nScan QR di atas. Berlaku 15 menit.\nKonfirmasi otomatis setelah lunas ✅`,
     });
+    // simpan message_id supaya bisa dihapus saat expired
+    const msgId = (sent as any)?.result?.message_id;
+    if (msgId) {
+      await supabase.from("invoices").update({ tg_msg_id: msgId }).eq("id", inv.invoice_id);
+    }
   } catch (e) {
     await tg("sendMessage", { chat_id: chat, text: `❌ Gagal buat invoice: ${e}` });
   }

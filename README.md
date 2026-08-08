@@ -299,3 +299,20 @@ release/
 - Cert SHA-256: `b4de5253ed23dce66e6c580127999604fc0c3d4e91949421574240673b71021b` — verifikasi fingerprint sama di tiap update.
 
 Keystore & password tidak masuk repo. Lisensi: MIT (upstream).
+
+## Supabase deployment (cloud, tanpa VPS)
+
+Fungsi Edge (`supabase/functions/`, Deno/TS, deploy via `supabase functions deploy <name> --no-verify-jwt`):
+
+| Fungsi | Endpoint | Fungsi |
+|---|---|---|
+| `invoice` | `POST /functions/v1/invoice` | buat invoice + QR dinamis |
+| `qris` | `GET /functions/v1/qris?invoice_id=` | PNG QR (hanya `pending`, selain itu 404) |
+| `hook` | `POST /functions/v1/hook` | webhook app Android |
+| `bot` | webhook Telegram (secret token) | perintah /pay /status /cancel |
+| `expiry` | `POST /functions/v1/expiry` | sweep expired + hapus QR di chat |
+| `health` | `GET /functions/v1/health` | health check (cron-job.org anti-pause) |
+
+- **Expired**: pg_cron tiap menit → panggil `expiry` via pg_net → status `expired`, pesan QR di Telegram dihapus (`deleteMessage`), buyer dikabari; endpoint QR 404.
+- **Cancel**: QR ikut dihapus dari chat.
+- Anti-pause 7 hari: cron-job.org ping `health` tiap 1 hari.
