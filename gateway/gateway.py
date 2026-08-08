@@ -235,8 +235,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": "amount must be positive int (IDR)"})
             conn = db()
             # surcharge unik supaya nominal tiap invoice pending beda -> matching pasti.
-            # nominal ratusan: kode 1-10; nominal >= 1000: kode 1-100
-            max_code = 10 if amount < 1000 else 100
+            # maksimal 5% dari nominal, tidak lebih dari 50 (Rp1000 -> 1-50, Rp100 -> 1-5)
+            max_code = max(1, min(50, amount // 20))
             while True:
                 charged = amount + random.randint(1, max_code)
                 clash = conn.execute(
