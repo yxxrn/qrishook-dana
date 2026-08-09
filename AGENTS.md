@@ -121,6 +121,7 @@ curl -s -X POST $BASE/hook -H "X-Webhook-Secret: $QRIS_HOOK_SECRET" \
 | `/database/query` 403 dari python | pakai curl (lihat 3.1) |
 | npm `EALLOWREMOTE` | registry mirror menolak → `--registry=https://registry.npmjs.org` |
 | Bot tidak menjawab | cek `getWebhookInfo` (pending/last error); jangan pakai polling bersamaan dengan webhook |
+| Bot kirim QR gagal / "mati" diam-diam | ubah `_shared/` → **redeploy semua fungsi yang mengimpornya** (mis. `_shared/invoice.ts` dipakai `invoice` + `bot`; shared module di-bundle per fungsi saat deploy) |
 | Invoice tidak match | cek status invoice (`expired`?), nominal webhook = `charged_amount` |
 | Proyek ter-pause | ping `/health` berhenti → aktifkan kembali lewat dashboard; perbaiki cron-job.org |
 
