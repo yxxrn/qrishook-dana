@@ -44,3 +44,23 @@ SELECT cron.schedule('qris-expiry-sweep', '* * * * *', $net$ SELECT net.http_pos
   headers := jsonb_build_object('Content-Type', 'application/json', 'X-Webhook-Secret', '<QRIS_HOOK_SECRET>'),
   body := '{}'::jsonb
 ) $net$);
+
+-- Callback queue + ringkasan harian (23:30 WIB = 16:30 UTC)
+CREATE TABLE IF NOT EXISTS public.callback_queue (
+  id bigserial PRIMARY KEY,
+  invoice_id text NOT NULL,
+  url text NOT NULL,
+  secret text,
+  payload jsonb NOT NULL,
+  attempts int NOT NULL DEFAULT 0,
+  next_retry_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.callback_queue ENABLE ROW LEVEL SECURITY;
+
+SELECT cron.unschedule('qris-daily-summary') WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'qris-daily-summary');
+SELECT cron.schedule('qris-daily-summary', '30 16 * * *', $net$ SELECT net.http_post(
+  url := 'https://<PROJECT_REF>.supabase.co/functions/v1/daily',
+  headers := jsonb_build_object('Content-Type', 'application/json', 'X-Webhook-Secret', '<QRIS_HOOK_SECRET>'),
+  body := '{}'::jsonb
+) $net$);

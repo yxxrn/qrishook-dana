@@ -38,6 +38,29 @@ Deno.serve(async (req) => {
       + (data.paid_at ? `\nLunas: ${data.paid_at}` : "") });
     return json(200, { ok: true });
   }
+  if (low.startsWith("/list")) {
+    const wibDate = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    const start = new Date(`${wibDate}T00:00:00+07:00`).toISOString();
+    const { data } = await supabase.from("invoices").select("*")
+      .gte("created_at", start).order("created_at", { ascending: false }).limit(10);
+    if (!data?.length) {
+      await tg("sendMessage", { chat_id: chat, text: "Tidak ada invoice hari ini." });
+      return json(200, { ok: true });
+    }
+    const lines = data.map((i: any) => {
+      const icon = i.status === "paid" ? "✅" : i.status === "pending" ? "⏳" : i.status === "expired" ? "❌" : "🚫";
+      let extra = "";
+      if (i.status === "pending" && i.expires_at) {
+        const remain = Math.max(0, Math.round((new Date(i.expires_at).getTime() - Date.now()) / 60000));
+        extra = ` sisa ${remain}m`;
+      }
+      if (i.status === "paid" && i.paid_at) extra = ` ${String(i.paid_at).slice(11, 16)}`;
+      return `${icon} \`${i.id.slice(-8)}\` ${rupiah(Number(i.base_amount))}${extra}`;
+    });
+    await tg("sendMessage", { chat_id: chat, parse_mode: "Markdown", text:
+      `📋 *Invoice hari ini* (${data.length} terakhir)\n` + lines.join("\n") });
+    return json(200, { ok: true });
+  }
   if (low.startsWith("/cancel")) {
     const inv = text.split(/\s+/)[1] || "";
     if (!inv) { await tg("sendMessage", { chat_id: chat, text: "Format: /cancel <invoice_id>" }); return json(200, { ok: true }); }

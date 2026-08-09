@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Unit test (shared)
+        run: cd supabase && deno test functions/_shared/
+      - name: Typecheck edge functions
+        run: cd supabase && deno check functions/health/index.ts functions/daily/index.ts functions/expiry/index.ts functions/bot/index.ts functions/hook/index.ts functions/invoice/index.ts functions/qris/index.ts

@@ -1,6 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { json } from "../_shared/http.ts";
 import { tg } from "../_shared/telegram.ts";
+import { deliverCallback } from "../_shared/callback.ts";
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json(405, { error: "POST only" });
@@ -42,21 +43,17 @@ Deno.serve(async (req) => {
           text: `✅ *Lunas!*\nInvoice: \`${inv.id}\`\nNominal: Rp${Number(inv.amount).toLocaleString("id-ID")}`,
         }));
       }
-      // callback eksternal
+      // callback eksternal: antre + coba kirim; gagal -> retry via /expiry
       if (inv.callback_url) {
-        EdgeRuntime.waitUntil((async () => {
-          const headers: Record<string, string> = { "Content-Type": "application/json" };
-          if (inv.callback_secret) headers["X-Callback-Secret"] = inv.callback_secret;
-          try {
-            await fetch(inv.callback_url, {
-              method: "POST", headers, body: JSON.stringify({
-                invoice_id: inv.id, amount: inv.amount, base_amount: inv.base_amount,
-                reference: inv.reference, status: "paid", sender_name: sender,
-                event_id: eventId, paid_at: now,
-              }),
-            });
-          } catch (e) { console.error("callback failed", e); }
-        })());
+        const { data: q } = await supabase.from("callback_queue").insert({
+          invoice_id: inv.id, url: inv.callback_url, secret: inv.callback_secret,
+          payload: {
+            invoice_id: inv.id, amount: inv.amount, base_amount: inv.base_amount,
+            reference: inv.reference, status: "paid", sender_name: sender,
+            event_id: eventId, paid_at: now,
+          },
+        }).select().single();
+        if (q) EdgeRuntime.waitUntil(deliverCallback(supabase, q));
       }
       return json(200, { ok: true, matched: inv.id });
     }
