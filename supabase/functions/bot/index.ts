@@ -1,6 +1,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { json } from "../_shared/http.ts";
-import { tg, rupiah } from "../_shared/telegram.ts";
+import { tg, rupiah, formatWIB } from "../_shared/telegram.ts";
 import { createInvoice } from "../_shared/invoice.ts";
 
 const EXPIRES = 900;
@@ -52,9 +52,10 @@ Deno.serve(async (req) => {
       let extra = "";
       if (i.status === "pending" && i.expires_at) {
         const remain = Math.max(0, Math.round((new Date(i.expires_at).getTime() - Date.now()) / 60000));
-        extra = ` sisa ${remain}m`;
+        extra = ` (sisa ${remain}m)`;
       }
-      if (i.status === "paid" && i.paid_at) extra = ` ${String(i.paid_at).slice(11, 16)}`;
+      if (i.status === "paid" && i.paid_at) extra = ` — ${formatWIB(i.paid_at)}`;
+      if (i.status === "expired" && i.created_at) extra = ` — ${formatWIB(i.created_at)}`;
       return `${icon} \`${i.id.slice(-8)}\` ${rupiah(Number(i.base_amount))}${extra}`;
     });
     await tg("sendMessage", { chat_id: chat, parse_mode: "Markdown", text:
