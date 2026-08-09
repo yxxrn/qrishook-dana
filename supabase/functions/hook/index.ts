@@ -3,6 +3,9 @@ import { json } from "../_shared/http.ts";
 import { tg } from "../_shared/telegram.ts";
 import { deliverCallback } from "../_shared/callback.ts";
 
+// global khusus runtime Supabase (tidak dikenal deno check lokal)
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json(405, { error: "POST only" });
   if (req.headers.get("X-Webhook-Secret") !== Deno.env.get("QRIS_HOOK_SECRET")) {

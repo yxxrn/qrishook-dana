@@ -3,6 +3,9 @@ import { json } from "../_shared/http.ts";
 import { tg, rupiah } from "../_shared/telegram.ts";
 import { retryCallbacks } from "../_shared/callback.ts";
 
+// global khusus runtime Supabase (tidak dikenal deno check lokal)
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
+
 // Dipanggil pg_cron tiap menit (via pg_net):
 // 1. sweep invoice expired -> status expired + hapus pesan QR di chat
 // 2. retry callback yang gagal (backoff, maks 5x)
