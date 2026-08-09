@@ -64,6 +64,10 @@ Deno.serve(async (req) => {
       chat_id: chat, photo: inv.qris_url, parse_mode: "Markdown",
       caption: `🧾 *${inv.invoice_id}*\n\nBayar: *${rupiah(inv.charged_amount)}*\n(= ${rupiah(amount)} + kode ${extra})\n\nScan QR di atas. Berlaku 15 menit.\nKonfirmasi otomatis setelah lunas ✅`,
     });
+    if (!(sent as any)?.ok) {
+      await tg("sendMessage", { chat_id: chat, text: "⚠️ Gagal kirim QR (coba lagi)." });
+      return json(200, { ok: true });
+    }
     // simpan message_id supaya bisa dihapus saat expired
     const msgId = (sent as any)?.result?.message_id;
     if (msgId) {
